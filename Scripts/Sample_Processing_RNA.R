@@ -10,6 +10,7 @@
 
 # Library 
 ################################################################################
+
 library(mclust)
 library(RColorBrewer)
 library(chromVAR)
@@ -24,12 +25,9 @@ library(readxl)
 library(ggplot2)
 library(stringr)
 library(scater)
-
-BiocManager::install("scater", lib= "/home/degan/R/x86_64-pc-linux-gnu-library/4.1", force = T) 
-
+library(Seurat)
 
 set.seed(123)
-
 ## Set up directories and file variables:
 ################################################################################
 setwd("/home/degan/Ov_Endo_MultiOmics/Inputs/")
@@ -94,8 +92,10 @@ seurat_combined[["percent.mt"]] <- PercentageFeatureSet(seurat_combined, pattern
 
 seurat_combined@meta.data$nCount_RNA_outlier_2mad <- isOutlier(log(seurat_combined@meta.data$nCount_RNA),
                                                               log = F,type = "lower",nmads = 2)
+
 seurat_combined@meta.data$nFeature_RNA_outlier_2mad <- isOutlier(log(seurat_combined@meta.data$nFeature_RNA),
                                                                   log = F,type = "lower",nmads = 2)
+
 seurat_combined@meta.data$percent_mt_outlier_2mad <- isOutlier(log1p(seurat_combined@meta.data$percent.mt),
                                                    log = F,type = "higher",nmads = 2)
 
@@ -151,65 +151,27 @@ plasma.cor <- cor(seurat_combined$PC1,seurat_combined$plasma.7,method = "spearma
 # Part 2: Reprocessing and CNV-read depth check
 ###########################################################
 
-# If PC1 is correalted with read depth, check to see if biological variation is corralted to PC1
-if (round(abs(count_cor_PC1),2) > 0.5){
-  
-  if( round(abs(stromal.cor),2) >= 0.5 |
-      round(abs(immune.cor),2) >= 0.5 |
-      round(abs(fibroblast.cor),2) >= 0.5 |
-      round(abs(endothelial.cor),2) >= 0.5 |
-      round(abs(epithelial.cor),2) >= 0.5 |
-      round(abs(smooth.cor),2) >= 0.5 |
-      round(abs(plasma.cor),2) >= 0.5){
-    seurat_combined <- FindNeighbors(seurat_combined,dims = 1:50)
-    seurat_combined <- FindClusters(seurat_combined,resolution = 0.7)
-    seurat_combined <- RunUMAP(seurat_combined,dims = 1:50)
-    Idents(seurat_combined) <- "RNA_snn_res.0.7"
+seurat_combined <- FindNeighbors(seurat_combined,dims = 1:50)
+seurat_combined <- FindClusters(seurat_combined,resolution = 0.7)
+seurat_combined <- RunUMAP(seurat_combined,dims = 1:50)
 
-    rna$PC1.loading <- rna@reductions$pca@cell.embeddings[,1]
-    rna$cell.barcode <- rownames(rna@meta.data)
-    rna$CNV.Pos <- ifelse(rna$Total_CNVs > 0,TRUE,FALSE)
-    
-    boxplot.cnv <- ggplot(rna@meta.data,aes(x= RNA_snn_res.0.7,y=PC1.loading,color = as.factor(CNV.Pos)))+geom_boxplot()
-    boxplot.cnv+ggsave("CNV_PC1_boxplot.png")
-    
-    data <- describeBy(boxplot.cnv$data$PC1.loading, boxplot.cnv$data$RNA_snn_res.0.7, mat = TRUE)
-    
-    wilcox <- wilcox.test(data = rna@meta.data,PC1.loading~CNV.Pos)
-    
-    if (wilcox$p.value < 0.05){
-      rna <- rna
-      saveRDS(rna,"./rna_PassedPC1Checks.rds")
-    }else{
-      all.genes <- rownames(rna)
-      rna <- ScaleData(rna, features = all.genes,vars.to.regress = "nCount_RNA")
-      rna <- RunPCA(rna)
-      rna <- FindNeighbors(rna,dims = 1:50)
-      rna <- FindClusters(rna,resolution = 0.7)
-      rna <- RunUMAP(rna,dims = 1:50)
-      Idents(rna) <- "RNA_snn_res.0.7"
-      saveRDS(rna,"./rna_FailedCNVTest.rds")
-    }
-    
-  }else{
-    all.genes <- rownames(rna)
-    rna <- ScaleData(rna, features = all.genes,vars.to.regress = "nCount_RNA")
-    rna <- RunPCA(rna)
-    rna <- FindNeighbors(rna,dims = 1:50)
-    rna <- FindClusters(rna,resolution = 0.7)
-    rna <- RunUMAP(rna,dims = 1:50)
-    Idents(rna) <- "RNA_snn_res.0.7"
-    saveRDS(rna,"./rna_FailedCorTest.rds")
-  }
-}else{
-  rna <- FindNeighbors(rna,dims = 1:50)
-  rna <- FindClusters(rna,resolution = 0.7)
-  rna <- RunUMAP(rna,dims = 1:50)
-  Idents(rna) <- "RNA_snn_res.0.7"
-  saveRDS(rna,"./rna_SkipChecks.rds")
-}
+DimPlot(seurat_combined, reduction = "umap", label = TRUE)
 
+Idents(seurat_combined) <- "RNA_snn_res.0.7"
 
+# RNA UMAP first
+rna.df <- as.data.frame(seurat_combined@reductions$umap@cell.embeddings)
+length(which(rownames(rna.df)==rownames(seurat_combined@meta.data)))
+rna.df$Sample <- seurat_combined@meta.data$seurat_clusters
 
+rna.sample.plot <-ggplot(rna.df,aes(x = UMAP_1,y=UMAP_2,color = Sample))+
+  geom_point(size = .1)+
+  theme_classic()+
+  theme(plot.title = element_text(face = "bold"))+
+  xlab("UMAP_1")+
 
-
+  ylab("UMAP_2")+ 
+  theme(legend.key.size = unit(0.2, "cm"))+
+  scale_color_manual(values = sampleColors)+
+  guides(colour = guide_legend(override.aes = list(size=6)))
+rna.sample.plot +ggsave("Sample_RNA.pdf",width = 8,height = 7)
